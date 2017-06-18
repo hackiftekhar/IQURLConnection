@@ -24,9 +24,9 @@
 #import <Foundation/NSURLConnection.h>
 #import <CoreGraphics/CGBase.h>
 
-@interface IQURLConnection : NSURLConnection
+@interface IQURLConnection : NSObject
 
-+(NSString*)backgroundSessionFilesDirectory;
++(NSString*_Nonnull)backgroundSessionFilesDirectory;
 
 ///--------------------------
 /// @name Initialization
@@ -60,12 +60,12 @@
 
 @property(nonatomic, strong, nullable, class) void (^backgroundSessionCompletionHandler)(void);
 
-@property(nonatomic, strong, readonly) NSURLRequest *originalRequest;
-@property(nonatomic, strong, readonly) NSURLSessionTask *task;
+@property(nonatomic, strong, readonly) NSURLRequest * _Nonnull originalRequest;
+@property(nonatomic, strong, readonly) NSURLSessionTask * _Nonnull task;
 
 @property(nonatomic, assign, readonly) BOOL isBackgroundTask;
 
-@property(nonatomic, strong, readonly) NSDictionary *cachedDictionaryResponse;
+@property(nonatomic, strong, readonly) NSDictionary * _Nullable cachedDictionaryResponse;
 
 
 ///--------------------------
