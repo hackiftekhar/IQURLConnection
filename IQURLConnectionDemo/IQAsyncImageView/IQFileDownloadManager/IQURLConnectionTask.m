@@ -60,10 +60,10 @@ NSString *const IQURLConnectionTaskDidFinishNotification      =   @"IQURLConnect
     
     NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:self.fileURL cachePolicy:NSURLRequestUseProtocolCachePolicy timeoutInterval:300];
 
-    _connection = [[IQURLConnection alloc] initWithRequest:request resumeData:_dataToResume responseBlock:NULL uploadProgressBlock:^(CGFloat progress) {
-
+    _connection = [[IQURLConnection alloc] initWithRequest:request isBackgroundTask:NO resumeData:_dataToResume responseBlock:NULL uploadProgressBlock:^(CGFloat progress) {
+        
         _uploadProgress = progress;
-            _status = IQURLConnectionTaskStatusUploading;
+        _status = IQURLConnectionTaskStatusUploading;
         
         for (NSInvocation *invocation in uploadProgressTargets)
         {
@@ -82,7 +82,7 @@ NSString *const IQURLConnectionTaskDidFinishNotification      =   @"IQURLConnect
             [invocation invoke];
         }
         
-    } completionBlock:^(NSData *result, NSError *error) {
+    } completionBlock:^(NSData * _Nullable result, NSError * _Nullable error) {
         
         if ([error code] == NSURLErrorCancelled)
         {

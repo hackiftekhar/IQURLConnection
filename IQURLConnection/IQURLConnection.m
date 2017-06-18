@@ -24,67 +24,168 @@
 
 #import "IQURLConnection.h"
 
-@interface IQURLConnection ()
+//App Transport Layer Security info.plist key documentation
+//https://developer.apple.com/library/content/documentation/General/Reference/InfoPlistKeyReference/Articles/CocoaKeys.html#//apple_ref/doc/uid/TP40009251-SW44
+
+@interface IQURLConnection ()<NSURLSessionDataDelegate>
 {
+    NSError *_customError;
     NSMutableData *_data;
 }
+
+@property(nonatomic, strong) NSURLSession *session;
 
 @end
 
 @implementation IQURLConnection
 
-@synthesize response = _response;
+#pragma mark - Initializers
 
-static NSOperationQueue *queue;
-
-+(void)initialize
++ (nonnull instancetype)sendAsynchronousRequest:(nonnull NSMutableURLRequest *)request
+                                  responseBlock:(void (^ __nullable)(NSHTTPURLResponse* _Nullable response))responseBlock
+                            uploadProgressBlock:(void (^ __nullable)(CGFloat progress))uploadProgress
+                          downloadProgressBlock:(void (^ __nullable)(CGFloat progress))downloadProgress
+                              completionHandler:(void (^ __nullable)(NSData* _Nullable result, NSError* _Nullable error))completion
 {
-    [super initialize];
-    
-    queue = [[NSOperationQueue alloc] init];
-}
-
-+ (IQURLConnection*)sendAsynchronousRequest:(NSMutableURLRequest *)request
-                              responseBlock:(IQURLConnectionResponseBlock)responseBlock
-                        uploadProgressBlock:(IQURLConnectionProgressBlock)uploadProgress
-                      downloadProgressBlock:(IQURLConnectionProgressBlock)downloadProgress
-                          completionHandler:(IQURLConnectionDataCompletionBlock)completion
-{
-    IQURLConnection *asyncRequest = [[IQURLConnection alloc] initWithRequest:request
-                                                                  resumeData:nil
-                                                               responseBlock:responseBlock
-                                                         uploadProgressBlock:uploadProgress
-                                                       downloadProgressBlock:downloadProgress
-                                                             completionBlock:completion];
+    IQURLConnection *asyncRequest = [[IQURLConnection alloc] initWithRequest:request isBackgroundTask:NO resumeData:nil responseBlock:responseBlock uploadProgressBlock:uploadProgress downloadProgressBlock:downloadProgress completionBlock:completion];
     [asyncRequest start];
     
     return asyncRequest;
 }
 
-- (instancetype)initWithRequest:(NSMutableURLRequest *)request
-                     resumeData:(NSData*)dataToResume
-                  responseBlock:(IQURLConnectionResponseBlock)responseBlock
-            uploadProgressBlock:(IQURLConnectionProgressBlock)uploadProgress
-          downloadProgressBlock:(IQURLConnectionProgressBlock)downloadProgress
-                completionBlock:(IQURLConnectionDataCompletionBlock)completion
+- (instancetype _Nonnull )initWithRequest:(NSMutableURLRequest *_Nonnull)request
+                         isBackgroundTask:(BOOL)isBackgroundTask
+                               resumeData:(NSData*_Nullable)dataToResume
+                            responseBlock:(void (^ __nullable)(NSHTTPURLResponse* _Nullable response))responseBlock
+                      uploadProgressBlock:(void (^ __nullable)(CGFloat progress))uploadProgress
+                    downloadProgressBlock:(void (^ __nullable)(CGFloat progress))downloadProgress
+                          completionBlock:(void (^ __nullable)(NSData* _Nullable result, NSError* _Nullable error))completion
 {
     if ([dataToResume length])
     {
         [request addValue:[NSString stringWithFormat: @"bytes=%lu-",(unsigned long)[dataToResume length]] forHTTPHeaderField:@"Range"];
     }
     
-    if (self = [super initWithRequest:request delegate:self startImmediately:NO])
+    if (self = [super init])
     {
-        [self setDelegateQueue:queue];
+        _isBackgroundTask = isBackgroundTask;
+        
+        if (isBackgroundTask && request.HTTPBody)
+        {
+            //Creating directory for saving file
+            NSString *documentsDirectory = [[self class] backgroundSessionFilesDirectory];
+            
+            NSString *fileName = [[NSUUID UUID] UUIDString];
+            NSString *filePath = [documentsDirectory stringByAppendingPathComponent:fileName];
+            NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+            
+            [request.HTTPBody writeToURL:fileURL atomically:YES];
+            
+            //If file created successfully, then uploading using background session
+            if ([[NSFileManager defaultManager] fileExistsAtPath:filePath])
+            {
+                static int i = 0;
+                i++;
+                NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
+                NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:[bundleIdentifier stringByAppendingFormat:@".background%d",i]];
+                _session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
+                
+                _task = [_session uploadTaskWithRequest:request fromFile:fileURL];
+            }
+            //else uploading through default session
+            else
+            {
+                NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
+                _session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
+                _task = [_session uploadTaskWithRequest:request fromData:request.HTTPBody];
+            }
+        }
+        else
+        {
+            NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
+            _session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
+            _task = [_session dataTaskWithRequest:request];
+        }
+        
         _uploadProgressBlock = uploadProgress;
         _downloadProgressBlock = downloadProgress;
         _dataCompletionBlock = completion;
         _responseBlock = responseBlock;
         
         _data = [[NSMutableData alloc] initWithData:dataToResume];
-        _expectedContentLength = NSURLResponseUnknownLength;
     }
     return self;
+}
+
+#pragma mark - Getters
+
++(NSString*)backgroundSessionFilesDirectory
+{
+    //Creating directory for saving file
+    NSString *documentsDirectory = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask, YES) firstObject];
+    NSString *backgroundDirectory = [documentsDirectory stringByAppendingPathComponent:[[[NSBundle mainBundle] bundleIdentifier] stringByAppendingPathComponent:@"background"]];
+    
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if ([fileManager fileExistsAtPath:backgroundDirectory] == NO)
+    {
+        [fileManager createDirectoryAtPath:backgroundDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    
+    return backgroundDirectory;
+}
+
+
+-(NSURLRequest *)originalRequest
+{
+    return _task.originalRequest;
+}
+
+-(NSHTTPURLResponse *)response
+{
+    if ([_task.response isKindOfClass:[NSHTTPURLResponse class]])
+    {
+        return (NSHTTPURLResponse*)_task.response;
+    }
+    else
+    {
+        return nil;
+    }
+}
+
+-(CGFloat)downloadProgress
+{
+    if (_task.countOfBytesExpectedToReceive != 0)
+    {
+        return ((CGFloat)_task.countOfBytesReceived/(CGFloat)_task.countOfBytesExpectedToReceive);
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+-(CGFloat)uploadProgress
+{
+    if (_task.countOfBytesExpectedToSend != 0)
+    {
+        return ((CGFloat)_task.countOfBytesSent/(CGFloat)_task.countOfBytesExpectedToSend);
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+-(NSError *)error
+{
+    if (_customError)
+    {
+        return _customError;
+    }
+    else
+    {
+        return _task.error;
+    }
 }
 
 -(NSCachedURLResponse *)cachedURLResponse
@@ -113,52 +214,67 @@ static NSOperationQueue *queue;
 
 -(void)sendDownloadProgress:(CGFloat)progress
 {
-    if (_downloadProgressBlock && _expectedContentLength!=NSURLResponseUnknownLength)
+    if (_downloadProgressBlock && progress > 0)
     {
-        if ([NSThread isMainThread])
-        {
-            _downloadProgressBlock(progress);
-        }
-        else
-        {
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                if (_downloadProgressBlock) _downloadProgressBlock(progress);
-            });
-        }
+        void (^progressBlock)(CGFloat progress) = _downloadProgressBlock;
+        
+        [[NSOperationQueue mainQueue] addOperationWithBlock:^{
+            
+            if (progressBlock)
+            {
+                progressBlock(progress);
+            }
+        }];
     }
 }
 
 -(void)sendUploadProgress:(CGFloat)progress
 {
-    if (_uploadProgressBlock)
+    if (_uploadProgressBlock && progress > 0)
     {
-        if ([NSThread isMainThread])
-        {
-            _uploadProgressBlock(progress);
-        }
-        else
-        {
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                if (_uploadProgressBlock)   _uploadProgressBlock(progress);
-            });
-        }
+        void (^progressBlock)(CGFloat progress) = _uploadProgressBlock;
+        
+        [[NSOperationQueue mainQueue] addOperationWithBlock:^{
+            
+            if (progressBlock)
+            {
+                progressBlock(progress);
+            }
+        }];
     }
+}
+
+void (^_backgroundSessionCompletionHandler)(void);
+
++(void)setBackgroundSessionCompletionHandler:(void (^)(void))backgroundSessionCompletionHandler
+{
+    _backgroundSessionCompletionHandler = backgroundSessionCompletionHandler;
+}
+
++(void (^)(void))backgroundSessionCompletionHandler
+{
+    return _backgroundSessionCompletionHandler;
 }
 
 -(void)sendCompletionData:(NSData*)data error:(NSError*)error
 {
     if (_dataCompletionBlock)
     {
-        if ([NSThread isMainThread])
-        {
-            _dataCompletionBlock(data,error);
-        }
-        else
-        {
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                if (_dataCompletionBlock)   _dataCompletionBlock(data,error);
-            });
-        }
+        void (^completionBlock)(NSData* _Nullable result, NSError* _Nullable error) = _dataCompletionBlock;
+        
+        [[NSOperationQueue mainQueue] addOperationWithBlock:^{
+            
+            if (completionBlock)
+            {
+                completionBlock(data,error);
+            }
+            
+            if ([[self class] backgroundSessionCompletionHandler])
+            {
+                [[self class] backgroundSessionCompletionHandler]();
+                [self class].backgroundSessionCompletionHandler = nil;
+            }
+        }];
     }
 }
 
@@ -166,84 +282,87 @@ static NSOperationQueue *queue;
 {
     if (_responseBlock)
     {
-        if ([NSThread isMainThread])
-        {
-            _responseBlock(response);
-        }
-        else
-        {
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                if (_responseBlock)
-                {
-                    _responseBlock(response);
-                }
-            });
-        }
+        void (^responseBlock)(NSHTTPURLResponse* _Nullable response) = _responseBlock;
+        
+        [[NSOperationQueue mainQueue] addOperationWithBlock:^{
+            
+            if (responseBlock)
+            {
+                responseBlock(response);
+            }
+        }];
     }
 }
 
-- (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSHTTPURLResponse *)response
+#pragma mark - NSURLSessionTaskDelegate
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential * _Nullable credential))completionHandler
 {
-    _response = response;
+    NSURLComponents *requestURLComponent = [[NSURLComponents alloc] initWithURL:task.originalRequest.URL resolvingAgainstBaseURL:NO];
     
-    NSDictionary *headers = [response allHeaderFields];
-    if (headers)
+    NSURLProtectionSpace *protectionSpace = [challenge protectionSpace];
+    
+    if ([[protectionSpace authenticationMethod] isEqualToString:NSURLAuthenticationMethodServerTrust])
     {
-        if (headers[@"Content-Range"])
-        {
-            NSString *contentRange = headers[@"Content-Range"];
-            NSRange range = [contentRange rangeOfString: @"/"];
-            NSString *totalBytesCount = [contentRange substringFromIndex: range.location + 1];
-            _expectedContentLength = [totalBytesCount floatValue];
-        }
-        else if (headers[@"Content-Length"])
-        {
-            _data = [[NSMutableData alloc] init];
-            _expectedContentLength = [headers[@"Content-Length"] floatValue];
-        }
-        else
-        {
-            _data = [[NSMutableData alloc] init];
-            _expectedContentLength = NSURLResponseUnknownLength;
-        }
+        NSURLCredential *credential = [NSURLCredential credentialForTrust:protectionSpace.serverTrust];
+        
+        completionHandler(NSURLSessionAuthChallengeUseCredential,credential);
     }
-    
-    if (_expectedContentLength == 0)
+    else
     {
-        _expectedContentLength = NSURLResponseUnknownLength;
+        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling,nil);
     }
-    
-    [self sendResponse:_response];
 }
 
-- (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didSendBodyData:(int64_t)bytesSent totalBytesSent:(int64_t)totalBytesSent totalBytesExpectedToSend:(int64_t)totalBytesExpectedToSend
 {
-    [_data appendData:data];
-
-    _totalBytesReceived = [_data length];
-
-    [self sendDownloadProgress:((CGFloat)_totalBytesReceived/_expectedContentLength)];
+    [self sendUploadProgress:self.uploadProgress];
 }
 
-- (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(nullable NSError *)error
 {
-    _error = error;
-    
     [self sendCompletionData:_data error:error];
 }
 
+#pragma mark - NSURLSessionDataDelegate
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSHTTPURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler
+{
+    NSDictionary *headers = [response allHeaderFields];
+    if (headers)
+    {
+        if (_data == nil)
+        {
+            _data = [[NSMutableData alloc] init];
+        }
+    }
+    
+    [self sendResponse:response];
+    completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data
+{
+    [_data appendData:data];
+    
+    [self sendDownloadProgress:self.downloadProgress];
+}
+
+#pragma mark - Other methods
+
 -(void)start
 {
-    [super start];
+    _customError = nil;
+    [self.task resume];
 }
 
 -(void)cancel
 {
-    [super cancel];
+    _customError = [NSError errorWithDomain:NSStringFromClass([self class]) code:NSURLErrorCancelled userInfo:nil];
     
-    _error = [NSError errorWithDomain:NSStringFromClass([self class]) code:NSURLErrorCancelled userInfo:nil];
+    [self sendCompletionData:_data error:_customError];
     
-    [self sendCompletionData:_data error:_error];
+    [self.task cancel];
     
     _responseBlock = NULL;
     _uploadProgressBlock = NULL;
@@ -251,34 +370,13 @@ static NSOperationQueue *queue;
     _dataCompletionBlock = NULL;
 }
 
-- (void)connectionDidFinishLoading:(NSURLConnection *)connection
+-(void)dealloc
 {
-    [self sendCompletionData:_data error:nil];
-}
-
-- (void)connection:(NSURLConnection *)connection didSendBodyData:(NSInteger)bytesWritten totalBytesWritten:(NSInteger)totalBytesWritten totalBytesExpectedToWrite:(NSInteger)totalBytesExpectedToWrite
-{
-    _totalBytesWritten = totalBytesWritten;
-    _totalBytesExpectedToWrite = totalBytesExpectedToWrite;
-
-    [self sendUploadProgress:((CGFloat)totalBytesWritten/(CGFloat)totalBytesExpectedToWrite)];
-}
-
-//https://developer.apple.com/library/ios/technotes/tn2232/_index.html
-- (void)connection:(NSURLConnection *)connection willSendRequestForAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
-{
-    NSURLProtectionSpace *protectionSpace = [challenge protectionSpace];
-    
-    id<NSURLAuthenticationChallengeSender> sender = [challenge sender];
-    
-    if ([[protectionSpace authenticationMethod] isEqualToString:NSURLAuthenticationMethodServerTrust])
-    {
-        [sender useCredential:[NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust] forAuthenticationChallenge:challenge];
-    }
-    else
-    {
-        [sender performDefaultHandlingForAuthenticationChallenge:challenge];
-    }
+    _data = nil;
+    _uploadProgressBlock = NULL;
+    _downloadProgressBlock = NULL;
+    _responseBlock = NULL;
+    _dataCompletionBlock = NULL;
 }
 
 @end

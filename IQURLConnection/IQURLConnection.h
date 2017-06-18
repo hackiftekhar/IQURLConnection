@@ -24,21 +24,9 @@
 #import <Foundation/NSURLConnection.h>
 #import <CoreGraphics/CGBase.h>
 
-/**
- `IQURLConnectionDataCompletionBlock`
- Used for sending callback when request is completed or failed.
- 
- `IQURLConnectionResponseBlock`
- Used for sending response callback.
- 
- `IQURLConnectionProgressBlock`
- Used for sending data upload/download callbacks.
- */
-typedef void (^IQURLConnectionDataCompletionBlock)(NSData* _Nullable result, NSError* _Nullable error);
-typedef void (^IQURLConnectionResponseBlock)(NSHTTPURLResponse* _Nullable response);
-typedef void (^IQURLConnectionProgressBlock)(CGFloat progress);
-
 @interface IQURLConnection : NSURLConnection
+
++(NSString*)backgroundSessionFilesDirectory;
 
 ///--------------------------
 /// @name Initialization
@@ -48,25 +36,36 @@ typedef void (^IQURLConnectionProgressBlock)(CGFloat progress);
  Send an asynchronous request, you can optionally register for response, upload, download and completionHandlers. This method automatically triggers `start` method.
  */
 + (nonnull instancetype)sendAsynchronousRequest:(nonnull NSMutableURLRequest *)request
-                                  responseBlock:(nullable IQURLConnectionResponseBlock)responseBlock
-                            uploadProgressBlock:(nullable IQURLConnectionProgressBlock)uploadProgress
-                          downloadProgressBlock:(nullable IQURLConnectionProgressBlock)downloadProgress
-                              completionHandler:(nullable IQURLConnectionDataCompletionBlock)completion;
+                                  responseBlock:(void (^ __nullable)(NSHTTPURLResponse* _Nullable response))responseBlock
+                            uploadProgressBlock:(void (^ __nullable)(CGFloat progress))uploadProgress
+                          downloadProgressBlock:(void (^ __nullable)(CGFloat progress))downloadProgress
+                              completionHandler:(void (^ __nullable)(NSData* _Nullable result, NSError* _Nullable error))completion;
 
 /**
  Initialize an asynchronous request, you can optionally register for response, upload, download and completionHandlers. This method doesn't automatically triggers `start` method, `start` method should be triggered manually according to need.
  */
-- (nonnull instancetype)initWithRequest:(nonnull NSMutableURLRequest *)request
-                             resumeData:(nullable NSData*)dataToResume
-                          responseBlock:(nullable IQURLConnectionResponseBlock)responseBlock
-                    uploadProgressBlock:(nullable IQURLConnectionProgressBlock)uploadProgress
-                  downloadProgressBlock:(nullable IQURLConnectionProgressBlock)downloadProgress
-                        completionBlock:(nullable IQURLConnectionDataCompletionBlock)completion;
+- (instancetype _Nonnull )initWithRequest:(NSMutableURLRequest *_Nonnull)request
+                         isBackgroundTask:(BOOL)isBackgroundTask
+                               resumeData:(NSData*_Nullable)dataToResume
+                            responseBlock:(void (^ __nullable)(NSHTTPURLResponse* _Nullable response))responseBlock
+                      uploadProgressBlock:(void (^ __nullable)(CGFloat progress))uploadProgress
+                    downloadProgressBlock:(void (^ __nullable)(CGFloat progress))downloadProgress
+                          completionBlock:(void (^ __nullable)(NSData* _Nullable result, NSError* _Nullable error))completion;
 
 ////Functions of NSURLConnection start and cancel
 - (void)start;
 - (void)cancel;
 
+
+
+@property(nonatomic, strong, nullable, class) void (^backgroundSessionCompletionHandler)(void);
+
+@property(nonatomic, strong, readonly) NSURLRequest *originalRequest;
+@property(nonatomic, strong, readonly) NSURLSessionTask *task;
+
+@property(nonatomic, assign, readonly) BOOL isBackgroundTask;
+
+@property(nonatomic, strong, readonly) NSDictionary *cachedDictionaryResponse;
 
 
 ///--------------------------
@@ -81,18 +80,7 @@ typedef void (^IQURLConnectionProgressBlock)(CGFloat progress);
 /**
  Upload progress callback block.
  */
-@property(nullable, nonatomic, strong) IQURLConnectionProgressBlock uploadProgressBlock;
-
-/**
- totalBytesWritten of upload request.
- */
-@property(nonatomic, assign, readonly) NSInteger totalBytesWritten;
-
-/**
- totalBytesExpectedToWrite of upload request.
- */
-@property(nonatomic, assign, readonly) NSInteger totalBytesExpectedToWrite;
-
+@property(nullable, nonatomic, strong) void (^uploadProgressBlock)(CGFloat progress);
 
 
 ///--------------------------
@@ -107,7 +95,7 @@ typedef void (^IQURLConnectionProgressBlock)(CGFloat progress);
 /**
  Response callback block.
  */
-@property(nullable, nonatomic, strong) IQURLConnectionResponseBlock responseBlock;
+@property(nullable, nonatomic, strong) void (^responseBlock)(NSHTTPURLResponse* _Nullable response);
 
 /**
  Download progress of request.
@@ -117,18 +105,7 @@ typedef void (^IQURLConnectionProgressBlock)(CGFloat progress);
 /**
  Download progress callback block.
  */
-@property(nullable, nonatomic, strong) IQURLConnectionProgressBlock downloadProgressBlock;
-
-/**
- totalBytesReceived of download request.
- */
-@property(nonatomic, assign, readonly) NSInteger totalBytesReceived;
-
-/**
- Expected content length of response data.
- */
-@property(nonatomic, assign, readonly) NSInteger expectedContentLength;
-
+@property(nullable, nonatomic, strong) void (^downloadProgressBlock)(CGFloat progress);
 
 
 ///--------------------------
@@ -148,7 +125,7 @@ typedef void (^IQURLConnectionProgressBlock)(CGFloat progress);
 /**
  Download progress callback block.
  */
-@property(nullable, nonatomic, strong) IQURLConnectionDataCompletionBlock dataCompletionBlock;
+@property(nullable, nonatomic, strong) void (^dataCompletionBlock)(NSData* _Nullable result, NSError* _Nullable error);
 
 
 ///--------------------------

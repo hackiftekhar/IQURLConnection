@@ -9,6 +9,6 @@ Pod::Spec.new do |s|
 	s.platform = :ios, '6.0'
 	s.source = { :git => "https://github.com/hackiftekhar/IQURLConnection.git", :tag => "v1.0.1" }
 	s.source_files = 'IQURLConnection/*.{h,m}'
-    s.framework = 'CoreGraphics'
+    s.frameworks = 'CoreGraphics'
 	s.requires_arc = true
 end
